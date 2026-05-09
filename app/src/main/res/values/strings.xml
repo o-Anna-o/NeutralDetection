@@ -1,8 +1,8 @@
 <resources>
     <string name="app_name">Neutral Emotion Detector</string>
     <string name="camera_permission_denied">Для работы приложения требуется разрешение на использование камеры</string>
-    <string name="neutral_state">Нейтральное состояние</string>
-    <string name="non_neutral_state">Эмоция обнаружена</string>
+    <string name="neutral_state">Нейтральное выражение лица</string>
+    <string name="non_neutral_state">Выражение НЕ нейтральное</string>
     <string name="no_face">Лицо не обнаружено</string>
     <string name="fps">FPS: %.1f</string>
     <string name="mouth_ratio">Рот: %.2f</string>

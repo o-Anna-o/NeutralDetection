@@ -7,6 +7,10 @@ import android.media.Image
 import android.util.Log
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import com.google.mediapipe.framework.image.BitmapImageBuilder
+import com.google.mediapipe.tasks.core.BaseOptions
+import com.google.mediapipe.tasks.vision.core.RunningMode
+import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
 import org.opencv.android.Utils
 import org.opencv.core.Core
 import org.opencv.core.CvType
@@ -26,7 +30,29 @@ class ImageAnalyzer(
     private var lastTime = System.currentTimeMillis()
     private var fps = 0f
 
-    // Индексы landmarks MediaPipe Face Mesh (упрощенные)
+    private var faceLandmarker: FaceLandmarker? = null
+    private var isMediaPipeInitialized = false
+
+    init {
+        // Инициализируем MediaPipe лениво, чтобы не блокировать конструктор
+    }
+
+    private fun setupFaceLandmarker() {
+        try {
+            val baseOptionsBuilder = BaseOptions.builder().setModelAssetPath("face_landmarker.task")
+            val optionsBuilder = FaceLandmarker.FaceLandmarkerOptions.builder()
+                .setBaseOptions(baseOptionsBuilder.build())
+                .setRunningMode(RunningMode.IMAGE)
+                .build()
+            
+            faceLandmarker = FaceLandmarker.createFromOptions(context, optionsBuilder)
+            isMediaPipeInitialized = true
+        } catch (e: Throwable) {
+            Log.e("ImageAnalyzer", "FaceLandmarker failed to initialize", e)
+            isMediaPipeInitialized = true // Чтобы больше не пытаться
+        }
+    }
+
     companion object {
         // Губы
         private const val UPPER_LIP = 13
@@ -34,7 +60,7 @@ class ImageAnalyzer(
         private const val LEFT_LIP = 78
         private const val RIGHT_LIP = 308
 
-        // Глаза (левый глаз)
+        // Глаза
         private val LEFT_EYE_INDICES = listOf(33, 133, 157, 158, 159, 160, 161, 173)
         private val RIGHT_EYE_INDICES = listOf(362, 263, 386, 387, 388, 389, 390, 466)
 
@@ -47,6 +73,10 @@ class ImageAnalyzer(
 
     override fun analyze(imageProxy: ImageProxy) {
         try {
+            if (!isMediaPipeInitialized) {
+                setupFaceLandmarker()
+            }
+
             val currentTime = System.currentTimeMillis()
             frameCount.incrementAndGet()
             if (currentTime - lastTime >= 1000) {
@@ -65,12 +95,11 @@ class ImageAnalyzer(
             // Предобработка с OpenCV
             preprocessFrame(mat)
 
-            // Здесь мы должны получить реальные landmarks от MediaPipe.
-            // Пока мы используем заглушку, но теперь передаем её в EmotionAnalyzer для расчета
-            val mockLandmarks = generateMockLandmarks(mat.width(), mat.height())
+            // Получаем landmarks от MediaPipe
+            val landmarks = getRealLandmarks(mat)
 
             // Используем EmotionAnalyzer для получения стабильного результата
-            val analysis = EmotionAnalyzer.analyze(mockLandmarks, mat.width(), mat.height())
+            val analysis = EmotionAnalyzer.analyze(landmarks, mat.width(), mat.height())
 
             // Освобождение ресурсов
             mat.release()
@@ -88,6 +117,36 @@ class ImageAnalyzer(
             Log.e("ImageAnalyzer", "Error analyzing image", e)
         } finally {
             imageProxy.close()
+        }
+    }
+
+    private fun getRealLandmarks(mat: Mat): List<Landmark> {
+        val landmarker = faceLandmarker ?: return generateMockLandmarks(mat.width(), mat.height())
+        
+        val bitmap = Bitmap.createBitmap(mat.width(), mat.height(), Bitmap.Config.ARGB_8888)
+        Utils.matToBitmap(mat, bitmap)
+        
+        val mpImage = BitmapImageBuilder(bitmap).build()
+        val result = landmarker.detect(mpImage)
+        
+        val landmarks = mutableListOf<Landmark>()
+        result.faceLandmarks().firstOrNull()?.let { faceLandmarks ->
+            faceLandmarks.forEachIndexed { index, landmark ->
+                // MediaPipe возвращает нормализованные координаты (0..1)
+                // Но для расчета расстояний в EmotionAnalyzer нам удобнее пиксели
+                landmarks.add(Landmark(
+                    index, 
+                    landmark.x() * mat.width(), 
+                    landmark.y() * mat.height()
+                ))
+            }
+        }
+        
+        return if (landmarks.isEmpty()) {
+            // Если лицо не найдено в текущем кадре
+            emptyList()
+        } else {
+            landmarks
         }
     }
 
@@ -156,16 +215,16 @@ class ImageAnalyzer(
     }
 
     private fun generateMockLandmarks(width: Int, height: Int): List<Landmark> {
-        // Заглушка: возвращаем фиктивные landmarks
+        // Заглушка: возвращаем фиктивныеlandmarks, которые теперь "нейтральны"
         return listOf(
-            Landmark(UPPER_LIP, width / 2f, height / 2f - 20),
-            Landmark(LOWER_LIP, width / 2f, height / 2f + 20),
+            Landmark(UPPER_LIP, width / 2f, height / 2f - 5),
+            Landmark(LOWER_LIP, width / 2f, height / 2f + 5),
             Landmark(LEFT_LIP, width / 2f - 30, height / 2f),
             Landmark(RIGHT_LIP, width / 2f + 30, height / 2f),
             Landmark(LEFT_EYE_INDICES[0], width / 2f - 50, height / 2f - 50),
-            Landmark(LEFT_EYE_INDICES[1], width / 2f - 30, height / 2f - 50),
+            Landmark(LEFT_EYE_INDICES[1], width / 2f - 30, height / 2f - 40),
             Landmark(RIGHT_EYE_INDICES[0], width / 2f + 50, height / 2f - 50),
-            Landmark(RIGHT_EYE_INDICES[1], width / 2f + 30, height / 2f - 50),
+            Landmark(RIGHT_EYE_INDICES[1], width / 2f + 30, height / 2f - 40),
             Landmark(LEFT_EYEBROW_INNER, width / 2f - 40, height / 2f - 70),
             Landmark(LEFT_EYEBROW_OUTER, width / 2f - 60, height / 2f - 70),
             Landmark(RIGHT_EYEBROW_INNER, width / 2f + 40, height / 2f - 70),

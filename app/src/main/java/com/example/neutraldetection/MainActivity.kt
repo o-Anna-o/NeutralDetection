@@ -108,17 +108,19 @@ class MainActivity : AppCompatActivity() {
                     ))
                 }
 
-            // Пытаемся сначала найти фронтальную камеру, если нет - берем любую доступную
-            val cameraSelector = try {
-                if (cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) {
-                    CameraSelector.DEFAULT_FRONT_CAMERA
-                } else if (cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)) {
-                    CameraSelector.DEFAULT_BACK_CAMERA
-                } else {
-                    CameraSelector.DEFAULT_BACK_CAMERA // Fallback
+            // Пытаемся найти любую доступную камеру
+            val cameraSelector = when {
+                cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) -> CameraSelector.DEFAULT_FRONT_CAMERA
+                cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) -> CameraSelector.DEFAULT_BACK_CAMERA
+                else -> {
+                    // Если не нашли стандартных, берем первую попавшуюся
+                    val availableCameraInfos = cameraProvider.availableCameraInfos
+                    if (availableCameraInfos.isNotEmpty()) {
+                        CameraSelector.Builder().addCameraFilter { it }.build()
+                    } else {
+                        CameraSelector.DEFAULT_BACK_CAMERA
+                    }
                 }
-            } catch (e: Exception) {
-                CameraSelector.DEFAULT_BACK_CAMERA
             }
 
             try {
@@ -164,8 +166,8 @@ class MainActivity : AppCompatActivity() {
             }
             EmotionStatus.NON_NEUTRAL -> {
                 statusText.text = getString(R.string.non_neutral_state)
-                statusText.setBackgroundColor(ContextCompat.getColor(this, R.color.non_neutral_red))
-                confidenceProgress.progressTintList = ContextCompat.getColorStateList(this, R.color.non_neutral_red)
+                statusText.setBackgroundColor(ContextCompat.getColor(this, R.color.non_neutral_orange))
+                confidenceProgress.progressTintList = ContextCompat.getColorStateList(this, R.color.non_neutral_orange)
             }
             EmotionStatus.NO_FACE -> {
                 statusText.text = getString(R.string.no_face)

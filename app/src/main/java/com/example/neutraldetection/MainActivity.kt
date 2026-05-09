@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.util.Log
 import android.widget.ProgressBar
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -36,6 +37,7 @@ class MainActivity : AppCompatActivity() {
 
     private var cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private var imageAnalyzer: ImageAnalysis? = null
+    private var lastStatus: EmotionStatus? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,6 +55,7 @@ class MainActivity : AppCompatActivity() {
         if (allPermissionsGranted()) {
             startCamera()
         } else {
+            // Запрашиваем разрешение только один раз
             ActivityCompat.requestPermissions(
                 this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS
             )
@@ -105,18 +108,31 @@ class MainActivity : AppCompatActivity() {
                     ))
                 }
 
-            val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
+            // Пытаемся сначала найти фронтальную камеру, если нет - берем любую доступную
+            val cameraSelector = try {
+                if (cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) {
+                    CameraSelector.DEFAULT_FRONT_CAMERA
+                } else if (cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)) {
+                    CameraSelector.DEFAULT_BACK_CAMERA
+                } else {
+                    CameraSelector.DEFAULT_BACK_CAMERA // Fallback
+                }
+            } catch (e: Exception) {
+                CameraSelector.DEFAULT_BACK_CAMERA
+            }
 
             try {
                 cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
+                val camera = cameraProvider.bindToLifecycle(
                     this as LifecycleOwner,
                     cameraSelector,
                     preview,
                     imageAnalyzer
                 )
+                Log.d(TAG, "Camera bound successfully")
             } catch (exc: Exception) {
                 Log.e(TAG, "Use case binding failed", exc)
+                Toast.makeText(this, "Не удалось подключить камеру: ${exc.message}", Toast.LENGTH_LONG).show()
             }
         }, ContextCompat.getMainExecutor(this))
     }
@@ -130,6 +146,15 @@ class MainActivity : AppCompatActivity() {
         val confidencePercent = (result.confidence * 100).toInt()
         confidenceText.text = getString(R.string.confidence, confidencePercent.toFloat())
         confidenceProgress.progress = confidencePercent
+
+        if (result.status != lastStatus) {
+            when (result.status) {
+                EmotionStatus.NEUTRAL -> Toast.makeText(this, R.string.neutral_state, Toast.LENGTH_SHORT).show()
+                EmotionStatus.NON_NEUTRAL -> Toast.makeText(this, R.string.non_neutral_state, Toast.LENGTH_SHORT).show()
+                else -> {}
+            }
+            lastStatus = result.status
+        }
 
         when (result.status) {
             EmotionStatus.NEUTRAL -> {

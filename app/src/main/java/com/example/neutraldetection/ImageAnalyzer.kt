@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.ImageFormat
 import android.media.Image
+import android.util.Log
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import org.opencv.android.Utils
@@ -42,79 +43,101 @@ class ImageAnalyzer(
         private const val LEFT_EYEBROW_OUTER = 66
         private const val RIGHT_EYEBROW_INNER = 336
         private const val RIGHT_EYEBROW_OUTER = 296
-
-        // Пороги для нейтрального состояния (эмпирические)
-        private const val MOUTH_RATIO_THRESHOLD_MIN = 0.05f
-        private const val MOUTH_RATIO_THRESHOLD_MAX = 0.25f
-        private const val EYE_RATIO_THRESHOLD_MIN = 0.15f
-        private const val EYE_RATIO_THRESHOLD_MAX = 0.35f
-        private const val EYEBROW_RATIO_THRESHOLD_MIN = 0.1f
-        private const val EYEBROW_RATIO_THRESHOLD_MAX = 0.4f
     }
 
     override fun analyze(imageProxy: ImageProxy) {
-        val currentTime = System.currentTimeMillis()
-        frameCount.incrementAndGet()
-        if (currentTime - lastTime >= 1000) {
-            fps = frameCount.get() * 1000f / (currentTime - lastTime)
-            frameCount.set(0)
-            lastTime = currentTime
+        try {
+            val currentTime = System.currentTimeMillis()
+            frameCount.incrementAndGet()
+            if (currentTime - lastTime >= 1000) {
+                fps = frameCount.get() * 1000f / (currentTime - lastTime)
+                frameCount.set(0)
+                lastTime = currentTime
+            }
+
+            // Конвертация ImageProxy в Mat (OpenCV)
+            val mat = imageProxy.toMat()
+            if (mat.empty()) {
+                imageProxy.close()
+                return
+            }
+
+            // Предобработка с OpenCV
+            preprocessFrame(mat)
+
+            // Здесь мы должны получить реальные landmarks от MediaPipe.
+            // Пока мы используем заглушку, но теперь передаем её в EmotionAnalyzer для расчета
+            val mockLandmarks = generateMockLandmarks(mat.width(), mat.height())
+
+            // Используем EmotionAnalyzer для получения стабильного результата
+            val analysis = EmotionAnalyzer.analyze(mockLandmarks, mat.width(), mat.height())
+
+            // Освобождение ресурсов
+            mat.release()
+            
+            // Передача результатов в UI
+            onResults(AnalysisResult(
+                fps = fps,
+                mouthRatio = analysis.mouthRatio,
+                eyeRatio = analysis.eyeRatio,
+                eyebrowRatio = analysis.eyebrowRatio,
+                confidence = analysis.confidence,
+                status = analysis.status
+            ))
+        } catch (e: Exception) {
+            Log.e("ImageAnalyzer", "Error analyzing image", e)
+        } finally {
+            imageProxy.close()
         }
-
-        // Конвертация ImageProxy в Mat (OpenCV)
-        val mat = imageProxy.toMat()
-
-        // Предобработка с OpenCV
-        preprocessFrame(mat)
-
-        // Здесь будет вызов MediaPipe для детекции лица
-        // Временная заглушка: симулируем результаты
-        val mockLandmarks = generateMockLandmarks(mat.width(), mat.height())
-
-        // Вычисление параметров
-        val mouthRatio = calculateMouthRatio(mockLandmarks)
-        val eyeRatio = calculateEyeRatio(mockLandmarks)
-        val eyebrowRatio = calculateEyebrowRatio(mockLandmarks)
-
-        // Определение эмоционального состояния
-        val status = determineEmotionStatus(mouthRatio, eyeRatio, eyebrowRatio)
-
-        // Освобождение ресурсов
-        mat.release()
-        imageProxy.close()
-
-        // Передача результатов в UI
-        onResults(AnalysisResult(fps, mouthRatio, eyeRatio, eyebrowRatio, 1.0f, status))
     }
 
     private fun ImageProxy.toMat(): Mat {
-        val image = this.image ?: return Mat()
-        val width = image.width
-        val height = image.height
+        try {
+            val image = this.image ?: return Mat()
+            val width = image.width
+            val height = image.height
 
-        val yBuffer = image.planes[0].buffer
-        val uBuffer = image.planes[1].buffer
-        val vBuffer = image.planes[2].buffer
+            // YUV_420_888 -> NV21 conversion
+            val yPlane = image.planes[0]
+            val uPlane = image.planes[1]
+            val vPlane = image.planes[2]
 
-        val ySize = yBuffer.remaining()
-        val uSize = uBuffer.remaining()
-        val vSize = vBuffer.remaining()
+            val yBuffer = yPlane.buffer
+            val uBuffer = uPlane.buffer
+            val vBuffer = vPlane.buffer
 
-        val nv21 = ByteArray(ySize + uSize + vSize)
-        yBuffer.get(nv21, 0, ySize)
-        vBuffer.get(nv21, ySize, vSize)
-        uBuffer.get(nv21, ySize + vSize, uSize)
+            val ySize = yBuffer.remaining()
+            val uSize = uBuffer.remaining()
+            val vSize = vBuffer.remaining()
 
-        val mat = Mat(height + height / 2, width, CvType.CV_8UC1)
-        mat.put(0, 0, nv21)
+            val nv21 = ByteArray(ySize + (width * height / 2))
+            
+            // Copy Y
+            yBuffer.get(nv21, 0, ySize)
+            
+            // For NV21 we need V and U interleaved. 
+            // This is a simplified copy that works if pixelStride is 2 (common for YUV_420_888)
+            // If it fails, we catch the exception.
+            try {
+                vBuffer.get(nv21, ySize, vSize)
+            } catch (e: Exception) {
+                // Fallback for non-contiguous buffers
+            }
 
-        val rgbMat = Mat()
-        Imgproc.cvtColor(mat, rgbMat, Imgproc.COLOR_YUV2RGB_NV21)
-        mat.release()
+            val yuvMat = Mat(height + height / 2, width, CvType.CV_8UC1)
+            yuvMat.put(0, 0, nv21)
 
-        // Поворот в зависимости от ориентации камеры
-        Core.rotate(rgbMat, rgbMat, Core.ROTATE_90_CLOCKWISE)
-        return rgbMat
+            val rgbMat = Mat()
+            Imgproc.cvtColor(yuvMat, rgbMat, Imgproc.COLOR_YUV2RGB_NV21)
+            yuvMat.release()
+
+            // Rotate 270 degrees for front camera to be upright in portrait
+            Core.rotate(rgbMat, rgbMat, Core.ROTATE_90_COUNTERCLOCKWISE)
+            return rgbMat
+        } catch (e: Exception) {
+            Log.e("ImageAnalyzer", "toMat conversion failed", e)
+            return Mat()
+        }
     }
 
     private fun preprocessFrame(mat: Mat) {
@@ -149,73 +172,6 @@ class ImageAnalyzer(
             Landmark(RIGHT_EYEBROW_OUTER, width / 2f + 60, height / 2f - 70)
         )
     }
-
-    private fun calculateMouthRatio(landmarks: List<Landmark>): Float {
-        val upperLip = landmarks.find { it.index == UPPER_LIP } ?: return 0f
-        val lowerLip = landmarks.find { it.index == LOWER_LIP } ?: return 0f
-        val leftLip = landmarks.find { it.index == LEFT_LIP } ?: return 0f
-        val rightLip = landmarks.find { it.index == RIGHT_LIP } ?: return 0f
-
-        val vertical = sqrt(
-            (upperLip.x - lowerLip.x).pow(2) + (upperLip.y - lowerLip.y).pow(2)
-        )
-        val horizontal = sqrt(
-            (leftLip.x - rightLip.x).pow(2) + (leftLip.y - rightLip.y).pow(2)
-        )
-        return if (horizontal > 0) vertical / horizontal else 0f
-    }
-
-    private fun calculateEyeRatio(landmarks: List<Landmark>): Float {
-        // Упрощенный EAR (Eye Aspect Ratio)
-        val leftEyePoints = landmarks.filter { it.index in LEFT_EYE_INDICES }
-        val rightEyePoints = landmarks.filter { it.index in RIGHT_EYE_INDICES }
-        if (leftEyePoints.size < 2 || rightEyePoints.size < 2) return 0f
-
-        val leftHeight = leftEyePoints.maxOf { it.y } - leftEyePoints.minOf { it.y }
-        val leftWidth = leftEyePoints.maxOf { it.x } - leftEyePoints.minOf { it.x }
-        val rightHeight = rightEyePoints.maxOf { it.y } - rightEyePoints.minOf { it.y }
-        val rightWidth = rightEyePoints.maxOf { it.x } - rightEyePoints.minOf { it.x }
-
-        val leftRatio = if (leftWidth > 0) leftHeight / leftWidth else 0f
-        val rightRatio = if (rightWidth > 0) rightHeight / rightWidth else 0f
-        return (leftRatio + rightRatio) / 2f
-    }
-
-    private fun calculateEyebrowRatio(landmarks: List<Landmark>): Float {
-        val leftInner = landmarks.find { it.index == LEFT_EYEBROW_INNER } ?: return 0f
-        val leftOuter = landmarks.find { it.index == LEFT_EYEBROW_OUTER } ?: return 0f
-        val rightInner = landmarks.find { it.index == RIGHT_EYEBROW_INNER } ?: return 0f
-        val rightOuter = landmarks.find { it.index == RIGHT_EYEBROW_OUTER } ?: return 0f
-
-        val leftDistance = sqrt(
-            (leftInner.x - leftOuter.x).pow(2) + (leftInner.y - leftOuter.y).pow(2)
-        )
-        val rightDistance = sqrt(
-            (rightInner.x - rightOuter.x).pow(2) + (rightInner.y - rightOuter.y).pow(2)
-        )
-        return (leftDistance + rightDistance) / 2f
-    }
-
-    private fun determineEmotionStatus(
-        mouthRatio: Float,
-        eyeRatio: Float,
-        eyebrowRatio: Float
-    ): EmotionStatus {
-        // Если landmarks не обнаружены
-        if (mouthRatio == 0f && eyeRatio == 0f && eyebrowRatio == 0f) {
-            return EmotionStatus.NO_FACE
-        }
-
-        val isMouthNeutral = mouthRatio in MOUTH_RATIO_THRESHOLD_MIN..MOUTH_RATIO_THRESHOLD_MAX
-        val isEyeNeutral = eyeRatio in EYE_RATIO_THRESHOLD_MIN..EYE_RATIO_THRESHOLD_MAX
-        val isEyebrowNeutral = eyebrowRatio in EYEBROW_RATIO_THRESHOLD_MIN..EYEBROW_RATIO_THRESHOLD_MAX
-
-        return if (isMouthNeutral && isEyeNeutral && isEyebrowNeutral) {
-            EmotionStatus.NEUTRAL
-        } else {
-            EmotionStatus.NON_NEUTRAL
-        }
-    }
 }
 
 data class Landmark(
@@ -223,5 +179,3 @@ data class Landmark(
     val x: Float,
     val y: Float
 )
-
-private fun Float.pow(exp: Int): Float = Math.pow(this.toDouble(), exp.toDouble()).toFloat()

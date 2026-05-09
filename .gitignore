@@ -1,0 +1,26 @@
+# Build outputs
+*.apk
+*.aab
+*.ap_
+*.aab.pro
+*.jar
+
+# Intermediate build files
+app/build/
+build/
+*/build/
+*/intermediates/
+*/outputs/
+
+# Local configuration files
+.gradle/
+local.properties
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/gradle.xml
+.idea/deploymentTargetSelector.xml
+*.iml
+
+# System files
+.DS_Store
+Thumbs.db

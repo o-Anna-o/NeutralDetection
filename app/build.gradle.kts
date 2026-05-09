@@ -15,11 +15,6 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        
-        ndk {
-            abiFilters.add("arm64-v8a")
-            abiFilters.add("x86_64")
-        }
     }
 
     buildTypes {
@@ -58,11 +53,10 @@ dependencies {
     implementation(libs.opencv)
     
     // MediaPipe
-    implementation("com.google.mediapipe:tasks-vision:0.10.10")
+    implementation(libs.mediapipe.tasks.vision)
     
-    // TensorFlow Lite (опционально)
-    implementation("org.tensorflow:tensorflow-lite:2.14.0")
-    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
+    // ML Kit Face Mesh (вместо MediaPipe для стабильности JNI)
+    implementation(libs.mlkit.face.mesh)
     
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

@@ -5,7 +5,7 @@ import kotlin.math.sqrt
 
 /**
  * Анализатор эмоционального состояния на основе геометрических параметров лица.
- * Реализует алгоритмы, описанные в ТЗ:
+ * Реализует алгоритмы:
  * - Mouth Opening Ratio (MOR)
  * - Eye Aspect Ratio (EAR)
  * - Eyebrow Position (EP)
@@ -14,13 +14,11 @@ object EmotionAnalyzer {
 
     // Пороговые значения для нейтрального состояния (настраиваются эмпирически)
     data class Thresholds(
-        val mouthRatioMin: Float = 0.05f,
-        val mouthRatioMax: Float = 0.25f,
-        val eyeRatioMin: Float = 0.15f,
-        val eyeRatioMax: Float = 0.35f,
-        val eyebrowRatioMin: Float = 0.1f,
-        val eyebrowRatioMax: Float = 0.4f,
-        val stabilityFrames: Int = 5  // количество кадров для стабильного определения
+        val mouthRatioMax: Float = 0.15f,     // Рот открыт, если > 0.15
+        val eyeRatioMin: Float = 0.18f,      // Глаза закрыты, если < 0.18
+        val eyeRatioMax: Float = 0.35f,      // Глаза выпучены, если > 0.35
+        val eyebrowRatioMax: Float = 0.30f,   // Брови вскинуты, если > 0.30 (относительно ширины глаз)
+        val stabilityFrames: Int = 3         // Меньше кадров для более быстрой реакции
     )
 
     private var thresholds = Thresholds()
@@ -121,26 +119,34 @@ object EmotionAnalyzer {
     }
 
     /**
-     * Вычисляет Eyebrow Position (EP) как среднее расстояние между внутренними и внешними точками бровей.
+     * Вычисляет Eyebrow Position (EP).
+     * Нормализуем расстояние бровей относительно расстояния между глазами.
      */
     private fun calculateEyebrowRatio(landmarks: List<Landmark>): Float {
         val leftInner = landmarks.find { it.index == 107 } ?: return 0f
         val leftOuter = landmarks.find { it.index == 66 } ?: return 0f
         val rightInner = landmarks.find { it.index == 336 } ?: return 0f
         val rightOuter = landmarks.find { it.index == 296 } ?: return 0f
+        
+        // Расстояние между глазами для нормализации
+        val leftEye = landmarks.find { it.index == 33 } ?: return 0f
+        val rightEye = landmarks.find { it.index == 263 } ?: return 0f
+        val eyeDistance = distance(leftEye, rightEye)
+        if (eyeDistance == 0f) return 0f
 
-        val leftDistance = distance(leftInner, leftOuter)
-        val rightDistance = distance(rightInner, rightOuter)
-        return (leftDistance + rightDistance) / 2f
+        val leftDist = distance(leftInner, leftOuter)
+        val rightDist = distance(rightInner, rightOuter)
+        
+        return ((leftDist + rightDist) / 2f) / eyeDistance
     }
 
     /**
      * Определяет, находится ли состояние в "коридоре спокойствия".
      */
     private fun isNeutralState(mouthRatio: Float, eyeRatio: Float, eyebrowRatio: Float): Boolean {
-        val mouthInRange = mouthRatio in thresholds.mouthRatioMin..thresholds.mouthRatioMax
+        val mouthInRange = mouthRatio <= thresholds.mouthRatioMax
         val eyeInRange = eyeRatio in thresholds.eyeRatioMin..thresholds.eyeRatioMax
-        val eyebrowInRange = eyebrowRatio in thresholds.eyebrowRatioMin..thresholds.eyebrowRatioMax
+        val eyebrowInRange = eyebrowRatio <= thresholds.eyebrowRatioMax
 
         return mouthInRange && eyeInRange && eyebrowInRange
     }
@@ -149,16 +155,18 @@ object EmotionAnalyzer {
      * Вычисляет уверенность в определении (0..1).
      */
     private fun calculateConfidence(mouthRatio: Float, eyeRatio: Float, eyebrowRatio: Float): Float {
-        // Нормализуем каждое значение относительно идеального центра диапазона
-        val mouthCenter = (thresholds.mouthRatioMin + thresholds.mouthRatioMax) / 2f
-        val eyeCenter = (thresholds.eyeRatioMin + thresholds.eyeRatioMax) / 2f
-        val eyebrowCenter = (thresholds.eyebrowRatioMin + thresholds.eyebrowRatioMax) / 2f
+        // Упрощенная уверенность: чем ближе к порогам, тем ниже уверенность
+        val mouthConf = (1f - (mouthRatio / thresholds.mouthRatioMax)).coerceIn(0f, 1f)
+        val eyeConf = if (eyeRatio < thresholds.eyeRatioMin) {
+            (eyeRatio / thresholds.eyeRatioMin)
+        } else if (eyeRatio > thresholds.eyeRatioMax) {
+            (1f - (eyeRatio - thresholds.eyeRatioMax))
+        } else {
+            1f
+        }.coerceIn(0f, 1f)
+        val eyebrowConf = (1f - (eyebrowRatio / thresholds.eyebrowRatioMax)).coerceIn(0f, 1f)
 
-        val mouthDev = 1 - (mouthRatio - mouthCenter).absoluteValue / (thresholds.mouthRatioMax - thresholds.mouthRatioMin)
-        val eyeDev = 1 - (eyeRatio - eyeCenter).absoluteValue / (thresholds.eyeRatioMax - thresholds.eyeRatioMin)
-        val eyebrowDev = 1 - (eyebrowRatio - eyebrowCenter).absoluteValue / (thresholds.eyebrowRatioMax - thresholds.eyebrowRatioMin)
-
-        return (mouthDev.coerceIn(0f, 1f) + eyeDev.coerceIn(0f, 1f) + eyebrowDev.coerceIn(0f, 1f)) / 3f
+        return (mouthConf + eyeConf + eyebrowConf) / 3f
     }
 
     /**

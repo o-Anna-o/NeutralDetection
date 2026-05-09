@@ -86,55 +86,62 @@ class MainActivity : AppCompatActivity() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
 
         cameraProviderFuture.addListener({
-            val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
+            try {
+                if (isFinishing || isDestroyed) return@addListener
+                
+                val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
 
-            val preview = Preview.Builder()
-                .build()
-                .also {
-                    it.setSurfaceProvider(cameraPreview.surfaceProvider)
-                }
+                val preview = Preview.Builder()
+                    .build()
+                    .also {
+                        it.setSurfaceProvider(cameraPreview.surfaceProvider)
+                    }
 
-            imageAnalyzer = ImageAnalysis.Builder()
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build()
-                .also {
-                    it.setAnalyzer(cameraExecutor, ImageAnalyzer(
-                        context = this,
-                        onResults = { analysisResult ->
-                            runOnUiThread {
-                                updateUI(analysisResult)
+                imageAnalyzer = ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .build()
+                    .also {
+                        it.setAnalyzer(cameraExecutor, ImageAnalyzer(
+                            onResults = { analysisResult ->
+                                runOnUiThread {
+                                    updateUI(analysisResult)
+                                }
                             }
-                        }
-                    ))
-                }
+                        ))
+                    }
 
-            // Пытаемся найти любую доступную камеру
-            val cameraSelector = when {
-                cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) -> CameraSelector.DEFAULT_FRONT_CAMERA
-                cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) -> CameraSelector.DEFAULT_BACK_CAMERA
-                else -> {
-                    // Если не нашли стандартных, берем первую попавшуюся
-                    val availableCameraInfos = cameraProvider.availableCameraInfos
-                    if (availableCameraInfos.isNotEmpty()) {
-                        CameraSelector.Builder().addCameraFilter { it }.build()
-                    } else {
-                        CameraSelector.DEFAULT_BACK_CAMERA
+                // Пытаемся найти любую доступную камеру
+                val cameraSelector = when {
+                    cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) -> CameraSelector.DEFAULT_FRONT_CAMERA
+                    cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) -> CameraSelector.DEFAULT_BACK_CAMERA
+                    else -> {
+                        // Если не нашли стандартных, берем первую попавшуюся
+                        val availableCameraInfos = cameraProvider.availableCameraInfos
+                        if (availableCameraInfos.isNotEmpty()) {
+                            CameraSelector.Builder().addCameraFilter { it }.build()
+                        } else {
+                            CameraSelector.DEFAULT_BACK_CAMERA
+                        }
                     }
                 }
-            }
 
-            try {
-                cameraProvider.unbindAll()
-                val camera = cameraProvider.bindToLifecycle(
-                    this as LifecycleOwner,
-                    cameraSelector,
-                    preview,
-                    imageAnalyzer
-                )
-                Log.d(TAG, "Camera bound successfully")
-            } catch (exc: Exception) {
-                Log.e(TAG, "Use case binding failed", exc)
-                Toast.makeText(this, "Не удалось подключить камеру: ${exc.message}", Toast.LENGTH_LONG).show()
+                if (isFinishing || isDestroyed) return@addListener
+
+                try {
+                    cameraProvider.unbindAll()
+                    cameraProvider.bindToLifecycle(
+                        this as LifecycleOwner,
+                        cameraSelector,
+                        preview,
+                        imageAnalyzer
+                    )
+                    Log.d(TAG, "Camera bound successfully")
+                } catch (exc: Exception) {
+                    Log.e(TAG, "Use case binding failed", exc)
+                    Toast.makeText(this, "Не удалось подключить камеру: ${exc.message}", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "ProcessCameraProvider failed", e)
             }
         }, ContextCompat.getMainExecutor(this))
     }
